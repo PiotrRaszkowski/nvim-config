@@ -1,0 +1,401 @@
+local jdtls = require("jdtls")
+
+local function setup_jdtls()
+	local function get_java_home()
+		local java_home = vim.fn.expand("~/.sdkman/candidates/java/21.0.1-zulu")
+		return java_home
+	end
+
+	local function get_jdtls()
+		-- Get the Mason Registry to gain access to downloaded binaries
+		local mason_registry = require("mason-registry")
+		-- Find the JDTLS package in the Mason Regsitry
+		local mason_jdtls = mason_registry.get_package("jdtls")
+		-- Find the full path to the directory where Mason has downloaded the JDTLS binaries
+		local jdtls_path = mason_jdtls:get_install_path()
+		-- Obtain the path to the jar which runs the language server
+		local launcher = vim.fn.glob(jdtls_path .. "/plugins/org.eclipse.equinox.launcher_*.jar")
+		-- Declare white operating system we are using, windows use win, macos use mac
+		local SYSTEM = "mac"
+		-- Obtain the path to configuration files for your specific operating system
+		local jdtls_config = jdtls_path .. "/config_" .. SYSTEM
+		-- Obtain the path to the Lomboc jari
+		local lombok = jdtls_path .. "/lombok.jar"
+
+		local jdtls_cache_config = vim.fn.stdpath("cache") .. "/jdtls/config"
+
+		return launcher, jdtls_config, lombok, jdtls_cache_config
+	end
+
+	local function get_bundles()
+		-- Get the Mason Registry to gain access to downloaded binaries
+		local mason_registry = require("mason-registry")
+
+		-- Find the Java Debug Adapter package in the Mason Registry
+		local java_debug = mason_registry.get_package("java-debug-adapter")
+		-- Obtain the full path to the directory where Mason has downloaded the Java Debug Adapter binaries
+		local java_debug_path = java_debug:get_install_path()
+
+		local bundles = {
+			vim.fn.glob(java_debug_path .. "/extension/server/com.microsoft.java.debug.plugin-*.jar", 1),
+		}
+
+		-- Find the Java Test package in the Mason Registry
+		local java_test = mason_registry.get_package("java-test")
+		-- Obtain the full path to the directory where Mason has downloaded the Java Test binaries
+		local java_test_path = java_test:get_install_path()
+		-- Add all of the Jars for running tests in debug mode to the bundles list
+		vim.list_extend(bundles, vim.split(vim.fn.glob(java_test_path .. "/extension/server/*.jar", 1), "\n"))
+
+		-- Add spring-boot jdtls bundles
+		vim.list_extend(bundles, require("spring_boot").java_extensions())
+
+		return bundles
+	end
+
+	local function get_workspace()
+		-- Get the home directory of your operating system
+		local home = os.getenv("HOME")
+		-- Declare a directory where you would like to store project information
+		local workspace_path = home .. "/.cache/nvim/jdtls/workspaces/"
+		-- Determine the project name
+		local project_name = vim.fn.fnamemodify(vim.fn.getcwd(), ":p:h:t")
+		-- Create the workspace directory by concatenating the designated workspace path and the project name
+		local workspace_dir = workspace_path .. project_name
+		return workspace_dir
+	end
+	-- Get the paths to the jdtls jar, operating specific configuration directory, and lombok jar
+	local launcher, jdtls_config, lombok, jdtls_cache_config = get_jdtls()
+
+	-- Get the path you specified to hold project information
+	local workspace_dir = get_workspace()
+
+	local java_home = get_java_home()
+
+	local cmd = {
+		java_home .. "/bin/java",
+        "-Djava.net.useSystemProxies=true",
+		"-Declipse.application=org.eclipse.jdt.ls.core.id1",
+		"-Dosgi.bundles.defaultStartLevel=4",
+		"-Declipse.product=org.eclipse.jdt.ls.core.product",
+		"-Dlog.protocol=true",
+		"-Dlog.level=ALL",
+		"-Dosgi.checkConfiguration=true",
+		"-Dosgi.sharedConfiguration.area=" .. jdtls_config,
+		"-Dosgi.sharedConfiguration.area.readOnly=true",
+		"-Dosgi.configuration.cascaded=true",
+		"-Xms2G",
+		"--add-modules=ALL-SYSTEM",
+		"--add-opens",
+		"java.base/java.util=ALL-UNNAMED",
+		"--add-opens",
+		"java.base/java.lang=ALL-UNNAMED",
+		"-javaagent:" .. lombok,
+		"-jar",
+		launcher,
+		"-configuration",
+		jdtls_cache_config,
+		"-data",
+		workspace_dir,
+	}
+	-- Determine the root directory of the project by looking for these specific markers
+	-- local root_dir = jdtls.setup.find_root({ "build.gradle", "settings.gradle", "gradlew", ".git", "mvnw", "pom.xml" })
+	local root_dir = vim.fs.dirname(
+		vim.fs.find({ "build.gradle", "settings.gradle", "mvnw", "pom.xml", ".git" }, { upward = true })[1]
+	)
+
+	-- Get the bundles list with the jars to the debug adapter, and testing adapters
+	local bundles = get_bundles()
+
+	-- Tell our JDTLS language features it is capable of
+	local capabilities = {
+		workspace = {
+			configuration = true,
+		},
+		textDocument = {
+			completion = {
+				snippetSupport = false,
+			},
+		},
+	}
+
+	local lsp_capabilities = require("cmp_nvim_lsp").default_capabilities()
+
+	for k, v in pairs(lsp_capabilities) do
+		capabilities[k] = v
+	end
+
+	-- Get the default extended client capablities of the JDTLS language server
+	local extendedClientCapabilities = jdtls.extendedClientCapabilities
+	-- Modify one property called resolveAdditionalTextEditsSupport and set it to true
+	extendedClientCapabilities.resolveAdditionalTextEditsSupport = true
+
+	local function java_keymaps()
+		-- ========================== SOURCE ==========================
+		-- Set a Vim motion to <Space> + <Shift>J + o to organize imports in normal mode
+		vim.keymap.set(
+			"n",
+			"<leader>Jsi",
+			"<Cmd> lua require('jdtls').organize_imports()<CR>",
+			{ desc = "Organize [I]mports" }
+		)
+
+		-- ========================== REFACTOR ==========================
+
+		-- Set a Vim motion to <Space> + <Shift>J + v to extract the code under the cursor to a variable
+		vim.keymap.set(
+			"n",
+			"<leader>Jrv",
+			"<Cmd> lua require('jdtls').extract_variable()<CR>",
+			{ desc = "Extract [V]ariable" }
+		)
+
+		-- Set a Vim motion to <Space> + <Shift>J + v to extract the code selected in visual mode to a variable
+		vim.keymap.set(
+			"v",
+			"<leader>Jrv",
+			"<Esc><Cmd> lua require('jdtls').extract_variable(true)<CR>",
+			{ desc = "Extract [V]ariable" }
+		)
+
+		-- Set a Vim motion to <Space> + <Shift>J + <Shift>C to extract the code under the cursor to a static variable
+		vim.keymap.set(
+			"n",
+			"<leader>Jrc",
+			"<Cmd> lua require('jdtls').extract_constant()<CR>",
+			{ desc = "Extract [C]onstant" }
+		)
+
+		-- Set a Vim motion to <Space> + <Shift>J + <Shift>C to extract the code selected in visual mode to a static variable
+		vim.keymap.set(
+			"v",
+			"<leader>Jrc",
+			"<Esc><Cmd> lua require('jdtls').extract_constant(true)<CR>",
+			{ desc = "Extract [C]onstant" }
+		)
+
+		-- ========================== TESTS ==========================
+		vim.keymap.set(
+			"n",
+			"<leader>tt",
+			"<Cmd> lua require('jdtls').test_nearest_method()<CR>",
+			{ desc = "Run [T]est Method" }
+		)
+
+		vim.keymap.set(
+			"v",
+			"<leader>tt",
+			"<Esc><Cmd> lua require('jdtls').test_nearest_method(true)<CR>",
+			{ desc = "Run [T]est Method" }
+		)
+
+		vim.keymap.set("n", "<leader>tc", "<Cmd> lua require('jdtls').test_class()<CR>", { desc = "Run Test [C]lass" })
+
+		vim.keymap.set(
+			"n",
+			"<leader>tg",
+			"<Cmd> lua require('jdtls.tests').generate()<CR>",
+			{ desc = "[G]enerate tests for current class" }
+		)
+		vim.keymap.set(
+			"n",
+			"<leader>to",
+			"<Cmd> lua require('jdtls.tests').goto_subjects()<CR>",
+			{ desc = "[O]pen test class" }
+		)
+
+		-- ============================= BUILD =============================
+		vim.keymap.set(
+			"n",
+			"<leader>JU",
+			"<Cmd> lua require('jdtls').update_projects_config({select_mode = 'all'})<CR>",
+			{ desc = "Update [a]ll" }
+		)
+
+		vim.keymap.set(
+			"n",
+			"<leader>JB",
+			"<Cmd> lua require('jdtls').build_projects({select_mode = 'all'})<CR>",
+			{ desc = "Build [a]ll" }
+		)
+	end
+
+	local function get_formatter()
+		local formatter_url = vim.fn.stdpath("config") .. "/lua/config/eclipse-java-google-style.xml"
+		return formatter_url
+	end
+
+	local formatterUrl = get_formatter()
+    local home = os.getenv('HOME')
+
+	local settings = {
+		java = {
+			format = {
+				enabled = true,
+				settings = {
+					url = formatterUrl,
+					-- url = "https://raw.githubusercontent.com/google/styleguide/gh-pages/eclipse-java-google-style.xml",
+					profile = "GoogleStyle",
+				},
+			},
+			eclipse = {
+				downloadSources = true,
+			},
+			maven = {
+				downloadSources = true,
+			},
+			signatureHelp = {
+				enabled = true,
+			},
+			contentProvider = {
+				preferred = "fernflower",
+			},
+			saveActions = {
+				organizeImports = true,
+			},
+			completion = {
+				favoriteStaticMembers = {
+					-- "org.hamcrest.MatcherAssert.assertThat",
+					"org.hamcrest.Matchers.*",
+					"org.hamcrest.CoreMatchers.*",
+					"org.assertj.core.api.Assertions.*",
+					-- "org.junit.jupiter.api.Assertions.*",
+					"java.util.Objects.requireNonNull",
+					"java.util.Objects.requireNonNullElse",
+					"org.mockito.Mockito.*",
+				},
+				filteredTypes = {
+					"com.sun.*",
+					"io.micrometer.shaded.*",
+					"java.awt.*",
+					"jdk.*",
+					"sun.*",
+				},
+				importOrder = {
+					"java",
+					"jakarta",
+					"javax",
+					"com",
+					"org",
+				},
+			},
+			sources = {
+				organizeImports = {
+					starThreshold = 9999,
+					staticThreshold = 9999,
+				},
+			},
+			codeGeneration = {
+				toString = {
+					template = "${object.className}{${member.name()}=${member.value}, ${otherMembers}}",
+				},
+				hashCodeEquals = {
+					useJava7Objects = true,
+				},
+				useBlocks = true,
+			},
+			referencesCodeLens = {
+				enabled = true,
+			},
+			references = {
+				includeDecompiledSources = true,
+			},
+			implementationsCodeLens = {
+				enabled = true,
+			},
+			configuration = {
+				updateBuildConfiguration = "automatic",
+				saveActions = {
+					organizeImports = true,
+				},
+				runtimes = {
+					-- {
+					-- 	name = "JavaSE-1.8",
+					-- 	path = "/usr/lib/jvm/java-8-openjdk/",
+					-- },
+					-- {
+					-- 	name = "JavaSE-11",
+					-- 	path = "/usr/lib/jvm/java-11-openjdk/",
+					-- },
+					-- {
+					-- 	name = "JavaSE-16",
+					-- 	path = home .. "/.local/jdks/jdk-16.0.1+9/",
+					-- },
+					-- {
+					-- 	name = "JDK-17",
+					-- 	path = home .. "/.sdkman/candidates/java/17.0.12-zulu/",
+					-- },
+				},
+			},
+			inlayHints = {
+				parameterNames = {
+					enabled = "all",
+				},
+			},
+		},
+	}
+
+	local config = {
+		cmd = cmd,
+		root_dir = root_dir,
+		settings = settings,
+		-- settings = {},
+		capabilities = capabilities,
+		flags = {
+			allow_incremental_sync = true,
+		},
+		init_options = {
+			bundles = bundles,
+			extendedClientCapabilities = extendedClientCapabilities,
+		},
+		on_attach = function(client, bufnr)
+			-- require("lsp_on_attach").on_attach()
+
+			-- Map the Java specific key mappings once the server is attached
+			java_keymaps()
+
+			-- Refresh the codelens
+			-- Code lens enables features such as code reference counts, implemenation counts, and more.
+			-- vim.lsp.codelens.refresh()
+
+			-- Setup a function that automatically runs every time a java file is saved to refresh the code lens
+			-- vim.api.nvim_create_autocmd("BufWritePost", {
+			-- 	pattern = { "*.java" },
+			-- 	callback = function()
+			-- 		local _, _ = pcall(vim.lsp.codelens.refresh)
+			-- 	end,
+			-- })
+
+			-- -- Setup the java debug adapter of the JDTLS server
+			jdtls.setup_dap({ hotcodereplace = "auto" })
+			require("dap").configurations.java = {
+				{
+					type = "server",
+					request = "attach",
+					name = "debug (attach) - remote",
+					hostname = "127.0.0.1",
+					port = 5005,
+				},
+			}
+			jdtls.setup.add_commands()
+
+            require('spring_boot').init_lsp_commands()
+
+			-- Find the main method(s) of the application so the debug adapter can successfully start up the application
+			-- Sometimes this will randomly fail if language server takes to long to startup for the project, if a ClassDefNotFoundException occurs when running
+			-- the debug tool, attempt to run the debug tool while in the main class of the application, or restart the neovim instance``
+			-- Unfortunately I have not found an elegant way to ensure this works 100%
+			-- jdtls.setup_dap_main_class_configs()
+			-- require('jdtls.dap').setup_dap_main_class_configs()
+			-- require("jdtls.dap").setup_dap_main_class_configs()
+		end,
+		-- on_attach = on_attach,
+	}
+
+	-- Start the JDTLS server
+	jdtls.start_or_attach(config)
+end
+
+return {
+	setup_jdtls = setup_jdtls,
+}

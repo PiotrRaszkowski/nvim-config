@@ -1,0 +1,159 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/your-repo/devrun/run-configurations.schema.json",
+  "title": "DevRun Configuration Schema",
+  "description": "Schema for DevRun task runner configurations",
+  "type": "object",
+  "required": ["configurations"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON schema reference"
+    },
+    "configurations": {
+      "type": "array",
+      "description": "Array of run configurations",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/definitions/GradleConfiguration" },
+          { "$ref": "#/definitions/TomcatConfiguration" },
+          { "$ref": "#/definitions/CommandConfiguration" }
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "BaseConfiguration": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique name for this configuration"
+        },
+        "beforeRun": {
+          "type": "string",
+          "description": "Name of configuration to run before this one"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory (supports ${workspaceFolder} variable)",
+          "default": "${workspaceFolder}"
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "GradleConfiguration": {
+      "allOf": [
+        { "$ref": "#/definitions/BaseConfiguration" }
+      ],
+      "type": "object",
+      "required": ["name", "command"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["gradle"],
+          "default": "gradle",
+          "description": "Configuration type: Gradle task runner"
+        },
+        "command": {
+          "type": "string",
+          "description": "Gradle command to execute (e.g., './gradlew clean bootRun')"
+        },
+        "vmArgs": {
+          "type": "array",
+          "description": "JVM arguments to inject into Gradle command",
+          "items": {
+            "type": "string"
+          },
+          "examples": [["-Xmx2G", "-Dspring.profiles.active=dev"]]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TomcatConfiguration": {
+      "allOf": [
+        { "$ref": "#/definitions/BaseConfiguration" }
+      ],
+      "type": "object",
+      "required": ["name", "type", "tomcatHome", "artifact"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["tomcat"],
+          "description": "Configuration type: Tomcat server deployment"
+        },
+        "tomcatHome": {
+          "type": "string",
+          "description": "Path to Tomcat installation directory (e.g., /usr/local/tomcat9)",
+          "examples": ["/usr/local/tomcat9", "/opt/tomcat10"]
+        },
+        "artifact": {
+          "type": "string",
+          "description": "Path to WAR file to deploy (supports ${workspaceFolder} variable)",
+          "pattern": "\\.war$",
+          "examples": ["${workspaceFolder}/build/libs/myapp-1.0.0.war"]
+        },
+        "httpPort": {
+          "type": "integer",
+          "description": "Tomcat HTTP port",
+          "default": 8080,
+          "minimum": 1024,
+          "maximum": 65535
+        },
+        "debugPort": {
+          "type": "integer",
+          "description": "JPDA debug port (enables remote debugging if set)",
+          "minimum": 1024,
+          "maximum": 65535,
+          "examples": [5005, 8000]
+        },
+        "contextPath": {
+          "type": "string",
+          "description": "Web application context path (defaults to WAR filename without extension)",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "examples": ["myapp", "api", "admin"]
+        },
+        "vmArgs": {
+          "type": "array",
+          "description": "JVM arguments for Tomcat (added to JAVA_OPTS)",
+          "items": {
+            "type": "string"
+          },
+          "examples": [["-Xmx1G", "-Dspring.profiles.active=dev"]]
+        },
+        "cleanDeploy": {
+          "type": "boolean",
+          "description": "Remove previous deployment before deploying",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "CommandConfiguration": {
+      "allOf": [
+        { "$ref": "#/definitions/BaseConfiguration" }
+      ],
+      "type": "object",
+      "required": ["name", "command"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["command"],
+          "default": "command",
+          "description": "Configuration type: Generic shell command"
+        },
+        "command": {
+          "type": "string",
+          "description": "Shell command to execute"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
