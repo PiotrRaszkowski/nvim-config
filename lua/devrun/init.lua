@@ -6,7 +6,9 @@ local task_manager = require("devrun.task-manager")
 local log_ui = require("devrun.log-ui")
 
 -- Setup function (called by plugin)
-function M.setup()
+function M.setup(opts)
+	opts = opts or {}
+
 	-- Register log callback with task manager
 	task_manager.register_log_callback(log_ui.get_log_callback())
 
@@ -21,6 +23,52 @@ function M.setup()
 	vim.keymap.set("n", "<leader>RR", "<cmd>DevRunReload<cr>", { desc = "[R]un [R]eload configs" })
 	vim.keymap.set("n", "<leader>RI", "<cmd>DevRunInit<cr>", { desc = "[R]un [I]nit example config" })
 	vim.keymap.set("n", "<leader>RA", "<cmd>DevRunAddRunConfiguration<cr>", { desc = "[R]un [A]dd configuration" })
+
+	-- Auto-reconnect to orphaned tasks on startup (opt-out with opts.auto_reconnect = false)
+	if opts.auto_reconnect ~= false then
+		vim.defer_fn(function()
+			local session = task_manager.load_session()
+			if session and session.tasks and #session.tasks > 0 then
+				task_manager.reconnect_session()
+			end
+		end, 100) -- Delay slightly to avoid startup interference
+	end
+
+	-- VimLeave autocmd to prompt for cleanup (opt-out with opts.prompt_on_exit = false)
+	if opts.prompt_on_exit ~= false then
+		vim.api.nvim_create_autocmd("VimLeave", {
+			group = vim.api.nvim_create_augroup("DevRunCleanup", { clear = true }),
+			callback = function()
+				local running = task_manager.get_running_tasks()
+				if #running > 0 then
+					-- Prompt user to stop all tasks
+					local response = vim.fn.confirm(
+						string.format(
+							"%d DevRun task(s) still running:\n%s\n\nStop all tasks before exit?",
+							#running,
+							table.concat(
+								vim.tbl_map(function(t)
+									return "  - " .. t.name
+								end, running),
+								"\n"
+							)
+						),
+						"&Yes\n&No\n&Cancel",
+						2 -- Default to "No"
+					)
+
+					if response == 1 then -- Yes - stop all
+						task_manager.stop_all_tasks()
+						task_manager.save_session() -- Save empty session
+						vim.cmd("sleep 500m") -- Brief delay for cleanup
+					elseif response == 3 then -- Cancel - abort exit
+						vim.cmd("cquit") -- Exit with error to prevent quit
+					end
+					-- Response 2 (No) - leave tasks running, session will be saved
+				end
+			end,
+		})
+	end
 end
 
 -- Run a configuration by name (handles beforeRun tasks)
@@ -159,9 +207,10 @@ function M.show_active_tasks()
 	for _, task in ipairs(tasks) do
 		local duration = string.format("%ds", task.duration)
 		local type_str = task.type or "gradle"
+		local pid_str = task.pid and string.format("PID: %d", task.pid) or "PID: N/A"
 		table.insert(
 			lines,
-			string.format("[%d] [%s] %s - %s (%s)", task.id, type_str, task.status:upper(), task.name, duration)
+			string.format("[%d] [%s] %s - %s (%s, %s)", task.id, type_str, task.status:upper(), task.name, duration, pid_str)
 		)
 		table.insert(lines, string.format("    Command: %s", task.command))
 		table.insert(lines, string.format("    CWD: %s", task.cwd))
@@ -400,6 +449,21 @@ function M.create_commands()
 		-- Add keymap to close
 		vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf, desc = "Close variables window" })
 	end, { desc = "DevRun: Show available variables and their current values" })
+
+	-- Session management commands
+	vim.api.nvim_create_user_command("DevRunReconnect", function()
+		task_manager.reconnect_session()
+	end, { desc = "DevRun: Reconnect to orphaned tasks from previous session" })
+
+	vim.api.nvim_create_user_command("DevRunCleanupOrphans", function()
+		task_manager.cleanup_orphans()
+	end, { desc = "DevRun: Cleanup stale tasks (PIDs no longer exist)" })
+
+	vim.api.nvim_create_user_command("DevRunSaveSession", function()
+		if task_manager.save_session() then
+			vim.notify("DevRun session saved", vim.log.levels.INFO)
+		end
+	end, { desc = "DevRun: Manually save current session" })
 end
 
 return M

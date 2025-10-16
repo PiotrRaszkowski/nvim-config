@@ -227,14 +227,28 @@ function M.execute(config, callbacks)
 		end
 	end)
 
+	-- Extract PID from process object
+	local pid = process.pid
+
 	return {
 		process = process,
+		pid = pid,
 		command = cmd,
 		cwd = cwd,
 		tomcat_home = variables.resolve(config.tomcatHome, config),
 		context_path = context,
 		http_port = http_port,
 	}
+end
+
+-- Check if process is still running
+local function is_process_alive(pid)
+	if not pid then
+		return false
+	end
+	-- Use kill -0 to check if process exists without sending a signal
+	local result = vim.fn.system(string.format("kill -0 %d 2>/dev/null", pid))
+	return vim.v.shell_error == 0
 end
 
 -- Stop Tomcat gracefully using catalina.sh
@@ -246,32 +260,86 @@ function M.stop(task_info)
 
 	vim.notify("Stopping Tomcat server gracefully...", vim.log.levels.INFO)
 
-	-- Use catalina.sh stop for graceful shutdown
-	local stop_cmd = string.format("%s/bin/catalina.sh stop", task_info.tomcat_home)
+	-- Step 1: Use catalina.sh stop for graceful shutdown
+	local stop_cmd = string.format("%s/bin/catalina.sh stop 2>/dev/null", task_info.tomcat_home)
 	local result = vim.fn.system(stop_cmd)
 
 	if vim.v.shell_error == 0 then
-		vim.notify("Tomcat shutdown initiated", vim.log.levels.INFO)
-
-		-- Also kill the process if it's still running
-		if task_info.process then
-			vim.defer_fn(function()
-				task_info.process:kill(15) -- SIGTERM after graceful stop
-			end, 2000) -- Wait 2 seconds for graceful shutdown
-		end
-
-		return true
+		vim.notify("Tomcat shutdown initiated via catalina.sh", vim.log.levels.INFO)
 	else
-		vim.notify("Failed to stop Tomcat: " .. result, vim.log.levels.ERROR)
+		vim.notify("catalina.sh stop failed, will try direct process termination", vim.log.levels.WARN)
+	end
 
-		-- Force kill as fallback
-		if task_info.process then
-			task_info.process:kill(9) -- SIGKILL
+	-- Step 2: Wait for Tomcat to shut down gracefully (up to 5 seconds)
+	if task_info.pid then
+		vim.notify(string.format("Waiting for Tomcat process (PID: %d) to terminate...", task_info.pid), vim.log.levels.INFO)
+
+		local terminated = vim.wait(5000, function()
+			return not is_process_alive(task_info.pid)
+		end, 200)
+
+		if terminated then
+			vim.notify("Tomcat terminated gracefully", vim.log.levels.INFO)
 			return true
 		end
 
-		return false
+		vim.notify("Tomcat still running after graceful shutdown timeout", vim.log.levels.WARN)
 	end
+
+	-- Step 3: Try to kill process group via SIGTERM
+	if task_info.pid and is_process_alive(task_info.pid) then
+		vim.notify(string.format("Sending SIGTERM to Tomcat process group (PID: %d)...", task_info.pid), vim.log.levels.WARN)
+		vim.fn.system(string.format("kill -TERM -- -%d 2>/dev/null", task_info.pid))
+
+		-- Wait for termination (2 seconds)
+		local terminated = vim.wait(2000, function()
+			return not is_process_alive(task_info.pid)
+		end, 100)
+
+		if terminated then
+			vim.notify("Tomcat process terminated via SIGTERM", vim.log.levels.INFO)
+			return true
+		end
+	end
+
+	-- Step 4: Try SystemObj kill as fallback
+	if task_info.process then
+		vim.notify("Trying SystemObj kill...", vim.log.levels.WARN)
+		task_info.process:kill(15) -- SIGTERM
+
+		-- Wait briefly
+		if task_info.pid then
+			vim.wait(1000, function()
+				return not is_process_alive(task_info.pid)
+			end, 100)
+
+			if not is_process_alive(task_info.pid) then
+				vim.notify("Tomcat terminated via SystemObj", vim.log.levels.INFO)
+				return true
+			end
+		end
+	end
+
+	-- Step 5: Force kill with SIGKILL as last resort
+	if task_info.pid and is_process_alive(task_info.pid) then
+		vim.notify(string.format("Force killing Tomcat process (PID: %d) with SIGKILL...", task_info.pid), vim.log.levels.ERROR)
+		vim.fn.system(string.format("kill -KILL -- -%d 2>/dev/null", task_info.pid))
+
+		-- Final verification
+		vim.wait(1000, function()
+			return not is_process_alive(task_info.pid)
+		end, 100)
+
+		if not is_process_alive(task_info.pid) then
+			vim.notify("Tomcat force-killed successfully", vim.log.levels.INFO)
+			return true
+		else
+			vim.notify("Failed to kill Tomcat process", vim.log.levels.ERROR)
+			return false
+		end
+	end
+
+	return true
 end
 
 -- Get executor metadata

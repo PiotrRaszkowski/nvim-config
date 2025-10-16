@@ -1053,6 +1053,127 @@ Create separate Tomcat configs for different environments:
 14. **Clear Logs**: Use `c` in log console to clear output and reduce clutter
 15. **Auto-Scroll**: Disable auto-scroll (`a` key) when reviewing earlier logs
 
+### Debugging with DevRun + nvim-dap
+
+You can debug processes started with DevRun using nvim-dap's remote attach feature.
+
+#### The Pattern: Start with Debug Port → Attach with DAP
+
+**Step 1: Configure DevRun with Debug Port**
+
+For **Gradle/Spring Boot** applications, add JVM debug arguments:
+
+```json
+{
+  "type": "gradle",
+  "name": "Spring Boot (Debug Mode)",
+  "command": "./gradlew bootRun",
+  "vmArgs": [
+    "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+  ],
+  "cwd": "${workspaceFolder}"
+}
+```
+
+For **Tomcat** deployments, use the `debugPort` field:
+
+```json
+{
+  "type": "tomcat",
+  "name": "Tomcat Dev (Debug)",
+  "artifact": "${workspaceFolder}/build/libs/app.war",
+  "tomcatHome": "${env:TOMCAT_HOME}",
+  "httpPort": 8080,
+  "debugPort": 5005,
+  "contextPath": "myapp"
+}
+```
+
+**Step 2: Start Application with DevRun**
+
+```vim
+:DevRun
+" Select your debug configuration
+```
+
+Or directly:
+```vim
+:DevRunConfig Spring Boot (Debug Mode)
+```
+
+**Step 3: Set Breakpoints**
+
+Navigate to your Java code and set breakpoints:
+```vim
+<leader>dt
+```
+
+**Step 4: Attach Debugger**
+
+Start DAP and connect to the debug port:
+```vim
+<leader>dc
+```
+
+DAP will connect to `127.0.0.1:5005` (configured in `lua/config/jdtls.lua:386-394`)
+
+**Step 5: Debug**
+
+Your breakpoints will now hit! Use debug keymaps:
+- `<leader>dc` - Continue
+- `<leader>dso` - Step over
+- `<leader>dsi` - Step into
+- `<leader>dsu` - Step out
+- `<leader>dx` - Close debug UI
+
+#### Suspend Options
+
+- `suspend=n` - App starts immediately, attach debugger when ready
+- `suspend=y` - App waits for debugger before starting (useful for debugging startup code)
+
+#### Multiple Debug Ports
+
+If running multiple services with debugging:
+
+```json
+{
+  "configurations": [
+    {
+      "name": "Service A (Debug)",
+      "type": "gradle",
+      "command": "./gradlew :serviceA:bootRun",
+      "vmArgs": ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"]
+    },
+    {
+      "name": "Service B (Debug)",
+      "type": "gradle",
+      "command": "./gradlew :serviceB:bootRun",
+      "vmArgs": ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"]
+    }
+  ]
+}
+```
+
+You'd need to add corresponding DAP configurations for different ports in `lua/config/jdtls.lua`.
+
+#### Complete Workflow Example
+
+**Scenario**: Debug Spring Boot app running via DevRun
+
+1. Open `run-configurations.json` and add debug config with `suspend=n`
+2. Press `<leader>Rr` → select "Spring Boot (Debug Mode)"
+3. App starts, DevRun log console shows output
+4. Open your Java file and set breakpoints: `<leader>dt`
+5. Attach debugger: `<leader>dc`
+6. Trigger the code path (e.g., HTTP request to endpoint)
+7. Debugger hits breakpoint, DAP UI opens
+8. Step through code with `<leader>dso`, inspect variables
+9. Continue with `<leader>dc` or close with `<leader>dx`
+
+**Note**: Your JDTLS config already has remote attach configured for port 5005 at `lua/config/jdtls.lua:386-394`.
+
+---
+
 ### Troubleshooting
 
 **Configuration not found**:
@@ -1077,6 +1198,12 @@ Forcefully stops all running tasks.
 - Check task is running: `:DevRunTasks`
 - Verify command is correct in JSON
 - Check working directory (cwd) is valid
+
+**Debugger won't attach**:
+- Verify app is running: `:DevRunTasks`
+- Check debug port in config matches DAP config (default: 5005)
+- Ensure app started with debug agent: check DevRun logs for JDWP output
+- Verify firewall isn't blocking localhost:5005
 
 ### Architecture
 

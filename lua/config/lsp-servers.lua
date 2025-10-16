@@ -144,12 +144,12 @@ vim.lsp.config("dockerls", {
 
 -- ============================================================================
 -- Dart Language Server (dartls)
--- For Flutter development - integrated with flutter-tools.nvim
+-- For Flutter development - configured in custom Flutter plugin
 -- ============================================================================
--- NOTE: Dart LSP is configured via flutter-tools.nvim plugin
--- See lua/plugins/flutter.lua for the complete Flutter/Dart setup
--- flutter-tools handles dartls configuration, Flutter SDK detection,
--- hot reload, debugging, and Flutter-specific features
+-- NOTE: Dart LSP is configured via custom Flutter plugin
+-- See lua/flutter/lsp.lua for the Dart LSP setup
+-- The custom Flutter plugin (lua/flutter/) handles Dart LSP, devices,
+-- hot reload, logging, and Flutter-specific features
 
 -- ============================================================================
 -- LSP Keymaps (Global)
@@ -202,7 +202,7 @@ local lsp_filetypes = {
 	{ "json,jsonc", "jsonls" },
 	{ "yaml.docker-compose", "docker_compose_language_service" },
 	{ "dockerfile", "dockerls" },
-	-- Note: dartls is handled by flutter-tools.nvim, not here
+	-- Note: dartls is handled by custom Flutter plugin (lua/flutter/lsp.lua), not here
 }
 
 for _, config in ipairs(lsp_filetypes) do
